@@ -7,7 +7,6 @@ from typing import Optional, Union, List, Dict, Tuple
 import torch
 import collections
 import random
-import pytextrank
 import spacy
 from datasets import load_dataset
 
@@ -287,6 +286,7 @@ def main():
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OurTrainingArguments))
+
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
@@ -304,7 +304,13 @@ def main():
             f"Output directory ({training_args.output_dir}) already exists and is not empty."
             "Use --overwrite_output_dir to overcome."
         )
-
+    # print("---------model_args----------")
+    # print(model_args)
+    # print("---------data_args-----------")
+    # print(data_args)
+    # print('-------training_args----------')
+    # print(training_args)
+    # exit()
     # stop_words = []
     # stop_file = open('stop_word.txt')
     # for line in stop_file.readlines():
@@ -384,6 +390,9 @@ def main():
     if model_args.tokenizer_name:
         tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, **tokenizer_kwargs)
     elif model_args.model_name_or_path:
+        print('--------------------------------')
+        print(model_args.model_name_or_path)
+#         exit()
         tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, **tokenizer_kwargs)
     else:
         raise ValueError(
@@ -460,27 +469,23 @@ def main():
             if examples[sent1_cname][idx] is None:
                 examples[sent1_cname][idx] = " "
 
-        if model_args.dup_type == "word":
+        if model_args.dup_type == "phrase":
             new_sent1 = []
             nlp = spacy.load("en_core_web_sm")
-            nlp.add_pipe("textrank")
-            num = 0
             for sent in examples[sent1_cname]:
+
+# -------------------提取名词短语----------------------------------------
                 doc = nlp(sent)
-                phrase_list1 = []
-                for phrase in doc._.phrases:
-                    phrase_list1.append(phrase.text)
-                #                 print('================原始短语列表====================')
-                #                 print(phrase_list1)
-                phrase_list = []
+
+                phrase_list1 = [chunk.text for chunk in doc.noun_chunks]
+# ---------------------------------------------------------------------
+
                 phrase_list2 = []
                 for phrase in phrase_list1:
                     i = phrase.split(' ')
-                    #                     控制短语长度
-                    if len(i) < 3:
+                    if len(i) < 4:
                         phrase_list2.append(phrase)
                 phrase_list = phrase_list1
-                del_index = []
                 new_str = []
                 for i1, x1 in enumerate(phrase_list):
                     is_in = False
@@ -502,13 +507,9 @@ def main():
                     dup = sorted(random.sample(range(0, sent_len - 1), add_len))
                     for i in dup:
                         ls.append(sent_list[i])
-                    #                     print('===================原论文要替换的单词=====================')
-                    #                     print(ls)
 
-                    word_list = []
                     replace_len = len(dup)
-                    #                     print('=================需要替换的长度==============')
-                    #                     print(replace_len)
+
                     number = 0
                     replace_list = []
                     if replace_len > 0:
@@ -520,8 +521,7 @@ def main():
                                 break
                             if number - replace_len > 2:
                                 replace_list.pop()
-                        #                         print('================修改之后要替换的短语===============')
-                        #                         print(replace_list)
+
                         for i in replace_list:
                             sent = sent.replace(i, i + ' ' + i)
                         new_sent1.append(sent)
@@ -529,17 +529,12 @@ def main():
                         new_sent1.append(sent)
                 else:
                     new_sent1.append(sent)
-            #                 print('==============修改之后的句子===========')
-            #                 print(sent)
+
             sentences = examples[sent0_cname] + new_sent1
             # sentences = new_sent1 + examples[sent0_cname]
         else:
             sentences = examples[sent0_cname] + examples[sent1_cname]
-        #         with open('text.txt', 'a+') as f:
-        #             f.write(str(sentences))
-        #         print('=================写入完毕=================')
-        #         exit()
-        # If hard negative exists
+
         if sent2_cname is not None:
             for idx in range(total):
                 if examples[sent2_cname][idx] is None:
@@ -552,6 +547,45 @@ def main():
             truncation=True,
             padding="max_length" if data_args.pad_to_max_length else False,
         )
+
+
+        if model_args.dup_type == "word":
+            new_sent1 = []
+            for sent in examples[sent1_cname]:
+
+                sent_list = sent.split(' ')
+                sent_len = len(sent_list)
+                if sent_len > 0:
+                    add_len = random.randrange(min(10, sent_len, max(2, int(model_args.dup_rate * sent_len))))
+                    dup = sorted(random.sample(range(0, sent_len - 1), add_len))
+                    for i in dup:
+                        if model_args.add_stop:
+                            stop_index = random.randint(0, len(stop_words) - 1)
+                            sent_list[i] = sent_list[i] + ' ' + stop_words[stop_index]
+                        else:
+                            sent_list[i] = sent_list[i] + ' ' + sent_list[i]
+                    new_sent1.append(' '.join(sent_list))
+                else:
+                    new_sent1.append(sent)
+
+            sentences = examples[sent0_cname] + new_sent1
+            # sentences = new_sent1 + examples[sent0_cname]
+        else:
+            sentences = examples[sent0_cname] + examples[sent1_cname]
+            # If hard negative exists
+        if sent2_cname is not None:
+            for idx in range(total):
+                if examples[sent2_cname][idx] is None:
+                    examples[sent2_cname][idx] = " "
+            sentences += examples[sent2_cname]
+
+        sent_features = tokenizer(
+            sentences,
+            max_length=data_args.max_seq_length,
+            truncation=True,
+            padding="max_length" if data_args.pad_to_max_length else False,
+        )
+
 
         if model_args.dup_type == "bpe":
             new_sent_features = {"input_ids": [], "token_type_ids": [], "attention_mask": []}
