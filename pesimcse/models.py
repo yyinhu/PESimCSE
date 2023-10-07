@@ -128,6 +128,7 @@ def cl_forward(cls,
     mlm_outputs = None
 
     if disable_dropout and momentum > 0.:
+        print("if disable_dropout and momentum > 0.:")
         input_ids = input_ids[:, 0, :]
         attention_mask = attention_mask[:, 0, :]
         if token_type_ids is not None:
@@ -232,20 +233,26 @@ def cl_forward(cls,
         # Get full batch embeddings: (bs x N, hidden)
         z1 = torch.cat(z1_list, 0)
         z2 = torch.cat(z2_list, 0)
-    # print
+
     cos_sim = cls.sim(z1.unsqueeze(1), z2.unsqueeze(0))
-    z2_random = torch.normal(0, 0.5, size=(192, z1.shape[1])).to(
+
+# ---------------------------------------------------------加入不同种类的噪声--------------------------------------------------------
+    # 泊松分布生成噪声
+    lambda_value = 5.0    # 定义泊松分布的λ (lambda) 参数
+    z2_random1 = torch.poisson(lambda_value * torch.ones(192, z1.shape[1])).to(cls.device)
+
+    # 均匀分布生成噪声
+    z2_random2 = torch.rand(192, z1.shape[1]).to(cls.device)
+
+    # 高斯分布生成噪声
+    z2_random3 = torch.normal(0, 0.5, size=(192, z1.shape[1])).to(
         cls.device)
-    cos_sim = torch.cat((cos_sim, cls.sim(z1.unsqueeze(1), z2_random.unsqueeze(0))), 1).to(cls.device)
-    # cos_sim_2 = cls.sim(z2.unsqueeze(1), z1.unsqueeze(0))
 
-    # if cls.pre_neg==None:
-    #     cls.pre_neg =z1.to(cls.device)
-    # else :
-    #     # cls.pre_neg =torch.cat((z1, cls.pre_neg), 0)
-    #     # cls.pre_neg = cls.pre_neg[-128:]
+    combined_noise = (z2_random2 + z2_random3) / 2
+    cos_sim = torch.cat((cos_sim, cls.sim(z1.unsqueeze(1), combined_noise.unsqueeze(0))), 1).to(cls.device)
 
-    #     cos_sim = torch.cat((cos_sim,cls.sim(z1.unsqueeze(1), cls.pre_neg.unsqueeze(0))),1).to(cls.device)
+# -------------------------------------------------------------------------------------------------------------------------------
+
     loss_fct = nn.CrossEntropyLoss()
     labels = torch.arange(cos_sim.size(0)).long().to(cls.device)
 
@@ -390,6 +397,7 @@ class BertForCL(BertPreTrainedModel):
                                    return_dict=return_dict,
                                    )
         else:
+            print("-------------return cl_forward------------")
             return cl_forward(self, self.bert,
                               input_ids=input_ids,
                               attention_mask=attention_mask,
